@@ -1,0 +1,11 @@
+# Ignore Terraform state files
+*.tfstate
+*.tfstate.*
+# Ignore Terraform backup files
+*.tfstate.backup
+# Ignore Terraform variables file
+*.tfvars
+# Ignore CLI configuration files
+.terraform/
+# Ignore Terraform lock files
+.terraform.lock.hcl

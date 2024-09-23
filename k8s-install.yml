@@ -1,0 +1,147 @@
+---
+- hosts: kube_cluster
+  become: yes
+
+  tasks:
+    - name: Ensure server IP is in /etc/hosts
+      lineinfile:
+        path: /etc/hosts
+        line: "{{ ansible_host }} {{ inventory_hostname }}"
+        state: present
+
+    - name: Stop AppArmor service
+      systemd:
+        name: apparmor
+        state: stopped
+
+    - name: Disable AppArmor service
+      systemd:
+        name: apparmor
+        enabled: no
+
+    - name: Update apt package index
+      apt:
+        update_cache: yes
+
+    - name: Install required packages
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - iptables
+          - socat
+          - conntrack
+          - containerd
+        state: present
+
+    - name: Create containerd config.toml
+      lineinfile:
+        line: ""
+        path: "/etc/containerd/config.toml"
+        create: yes
+
+    - name: Populate containerd config
+      shell: "containerd config default | tee /etc/containerd/config.toml"
+    
+    - name: Set SystemdCgroup to true in containerd config
+      replace:
+        path: /etc/containerd/config.toml
+        regexp: "SystemdCgroup = false"
+        replace: "SystemdCgroup = true"
+
+    - name: Enable IP forwarding
+      sysctl:
+        name: net.ipv4.ip_forward
+        value: 1
+        state: present
+        reload: yes
+
+    - name: Ensure containerd is running
+      systemd:
+        name: containerd
+        state: started
+        enabled: yes
+
+    - name: Restart containerd to apply changes
+      systemd:
+        name: containerd
+        state: restarted
+
+    - name: Create keyrings directory
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+
+    - name: Download Kubernetes public signing key
+      get_url:
+        url: https://pkgs.k8s.io/core:/stable:/v1.31/deb/Release.key
+        dest: /tmp/kubernetes-apt-key.gpg
+
+    - name: Convert key to keyring format
+      command: gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg /tmp/kubernetes-apt-key.gpg
+      args:
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    - name: Set permissions for the keyring
+      file:
+        path: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        mode: '0644'
+
+    - name: Add Kubernetes apt repository
+      lineinfile:
+        path: /etc/apt/sources.list.d/kubernetes.list
+        line: 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.31/deb/ /'
+        create: yes
+
+    - name: Set permissions for the sources list
+      file:
+        path: /etc/apt/sources.list.d/kubernetes.list
+        mode: '0644'
+
+    - name: Update apt package index again
+      apt:
+        update_cache: yes
+
+    - name: Install required packages
+      apt:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: present
+        update_cache: yes
+
+    - name: Enable kubelet
+      systemd:
+        name: kubelet
+        enabled: true
+        state: started
+
+    - name: Disable swap
+      command: swapoff -a
+      ignore_errors: true
+
+    - name: Ensure swap is disabled permanently
+      lineinfile:
+        path: /etc/fstab
+        regexp: '^.*swap.*'
+        state: absent
+
+    - name: Add modules conf for k8s
+      blockinfile:
+        path: "/etc/modules-load.d/k8s.conf"
+        block: |
+              overlay
+              br_netfilter
+        create: yes
+
+    - name: Add modules
+      community.general.modprobe:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - overlay
+        - br_netfilter
